@@ -1,3 +1,4 @@
+// lib/weather_display.dart
 import 'package:flutter/material.dart';
 
 class WeatherDisplay extends StatefulWidget {
@@ -16,12 +17,13 @@ class _WeatherDisplayState extends State<WeatherDisplay> {
 
   final List<String> _cities = ['New York', 'London', 'Tokyo', 'Invalid City'];
 
+  // ====== تصحيح معادلات التحويل ======
   double celsiusToFahrenheit(double celsius) {
-    return celsius * 9 / 5;
+    return celsius * 9 / 5 + 32;
   }
 
   double fahrenheitToCelsius(double fahrenheit) {
-    return fahrenheit - 32 * 5 / 9;
+    return (fahrenheit - 32) * 5 / 9;
   }
 
   // Simulate API call that sometimes returns null or malformed data
@@ -32,9 +34,9 @@ class _WeatherDisplayState extends State<WeatherDisplay> {
       return null;
     }
 
-    
+    // Simulate occasionally only partial data (malformed)
     if (DateTime.now().millisecond % 4 == 0) {
-      return {'city': city, 'temperature': 22.5}; 
+      return {'city': city, 'temperature': 22.5}; // incomplete on purpose
     }
 
     return {
@@ -49,20 +51,52 @@ class _WeatherDisplayState extends State<WeatherDisplay> {
     };
   }
 
+  // ====== تحميل البيانات مع معالجة الأخطاء والـloading بشكل صحيح ======
   Future<void> _loadWeather() async {
-    if (mounted) {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _error = null;
+      _weatherData = null;
+    });
+
+    try {
+      final data = await _fetchWeatherData(_selectedCity);
+
+      if (data == null) {
+        // API returned null
+        if (!mounted) return;
+        setState(() {
+          _error = 'No data returned from server for "$_selectedCity".';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final parsed = WeatherData.tryParse(data);
+      if (parsed == null) {
+        // Malformed / incomplete data
+        if (!mounted) return;
+        setState(() {
+          _error = 'Received malformed weather data.';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      if (!mounted) return;
       setState(() {
-        _isLoading = true;
-        _error = null;
+        _weatherData = parsed;
+        _isLoading = false;
+      });
+    } catch (e, st) {
+      // Unexpected error: show message and stop loading
+      if (!mounted) return;
+      setState(() {
+        _error = 'Error loading weather: ${e.toString()}';
+        _isLoading = false;
       });
     }
-
-    
-    final data = await _fetchWeatherData(_selectedCity);
-    setState(() {
-      _weatherData = WeatherData.fromJson(data); 
-      _isLoading = false;
-    });
   }
 
   @override
@@ -127,10 +161,32 @@ class _WeatherDisplayState extends State<WeatherDisplay> {
           ),
           const SizedBox(height: 16),
 
-          if (_isLoading && _error == null)
+          // Loading, error, or data
+          if (_isLoading && _error == null) ...[
             const Center(child: CircularProgressIndicator())
-          
-          else if (_weatherData != null)
+          ] else if (_error != null) ...[
+            // Show error and a retry button
+            Card(
+              color: Colors.red[50],
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  children: [
+                    Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.red),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: _loadWeather,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ] else if (_weatherData != null) ...[
             Card(
               elevation: 4,
               child: Padding(
@@ -199,8 +255,11 @@ class _WeatherDisplayState extends State<WeatherDisplay> {
                   ],
                 ),
               ),
-            )
-          
+            ),
+          ] else ...[
+            // neither loading, nor error, nor data (empty state)
+            const Center(child: Text('No weather data available.')),
+          ],
         ],
       ),
     );
@@ -238,15 +297,41 @@ class WeatherData {
     required this.icon,
   });
 
-  
-  factory WeatherData.fromJson(Map<String, dynamic>? json) {
-    return WeatherData(
-      city: json!['city'],
-      temperatureCelsius: json['temperature'].toDouble(),
-      description: json['description'],
-      humidity: json['humidity'], 
-      windSpeed: json['windSpeed'].toDouble(), 
-      icon: json['icon'], 
-    );
+  // Try-parse: ترجع null لو البيانات ناقصة أو غير صحيحة
+  static WeatherData? tryParse(Map<String, dynamic>? json) {
+    if (json == null) return null;
+
+    try {
+      // Required keys
+      if (!json.containsKey('city') || !json.containsKey('temperature')) {
+        return null;
+      }
+
+      final city = json['city']?.toString();
+      final tempVal = json['temperature'];
+      if (city == null || tempVal == null) return null;
+
+      final double temperature = (tempVal is num) ? tempVal.toDouble() : double.tryParse(tempVal.toString()) ?? double.nan;
+      if (temperature.isNaN) return null;
+
+      // Optional with defaults if missing
+      final description = json['description']?.toString() ?? 'No description';
+      final humidityVal = json['humidity'] ?? 0;
+      final humidity = (humidityVal is int) ? humidityVal : int.tryParse(humidityVal.toString()) ?? 0;
+      final windVal = json['windSpeed'] ?? 0.0;
+      final windSpeed = (windVal is num) ? windVal.toDouble() : double.tryParse(windVal.toString()) ?? 0.0;
+      final icon = json['icon']?.toString() ?? '❓';
+
+      return WeatherData(
+        city: city,
+        temperatureCelsius: temperature,
+        description: description,
+        humidity: humidity,
+        windSpeed: windSpeed,
+        icon: icon,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }
